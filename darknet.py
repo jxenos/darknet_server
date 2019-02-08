@@ -112,16 +112,18 @@ class Darknet(object):
         self.meta = None
 
         self.colors = [
-                       [1, 0, 1], [0, 0, 1],
-                       [0, 1, 1], [0, 1, 0],
-                       [1, 1, 0], [1, 0, 0]
-                      ]
+            [1, 0, 1], [0, 0, 1],
+            [0, 1, 1], [0, 1, 0],
+            [1, 1, 0], [1, 0, 0]
+        ]
 
         self.lib = CDLL(self.libfilepath, RTLD_GLOBAL)
         self.lib.network_width.argtypes = [c_void_p]
         self.lib.network_width.restype = c_int
         self.lib.network_height.argtypes = [c_void_p]
         self.lib.network_height.restype = c_int
+
+        self.clib = CDLL(util.find_library("c"))
 
         self.predict = self.lib.network_predict
         self.predict.argtypes = [c_void_p, POINTER(c_float)]
@@ -214,10 +216,13 @@ class Darknet(object):
         img = img.reshape((w*h*c))
         outimg = self.make_image(w, h, c)
         data = c_array(c_float, img)
-        outimg.data = data
+
+        # preserve pointer to fix memory leak
+        #outimg.data = data
+        clib.memcpy(outimg.data, data, outimg.w*outimg.h*outimg.c*4)
+
         self.rgbgr_image(outimg)
         return outimg
-
 
     def get_color(self, c, x, max_num):
         """
@@ -230,7 +235,6 @@ class Darknet(object):
         ratio -= i
         r = (1 - ratio) * self.colors[i][c] + ratio*self.colors[j][c]
         return int(255*r)
-
 
     def detect(self, image, thresh=.5, hier_thresh=.5, nms=.45):
         """
@@ -255,19 +259,18 @@ class Darknet(object):
                     bbox = dets[j].bbox
                     res.append(
                         YoloResult(
-                                   i,self.meta.names[i],
-                                   dets[j].prob[i],
-                                   (
-                                    bbox.x, bbox.y,
-                                    bbox.w, bbox.h
-                                   )
-                                  )
-                              )
+                            i, self.meta.names[i],
+                            dets[j].prob[i],
+                            (
+                                bbox.x, bbox.y,
+                                bbox.w, bbox.h
+                            )
+                        )
+                    )
         res = sorted(res, key=lambda x: x.score, reverse=True)
-        # self.free_image(image)
+        self.free_image(image)
         self.free_detections(dets, num)
         return res
-
 
     def draw_detections(self, img, yolo_results):
         """
@@ -289,14 +292,15 @@ class Darknet(object):
             green = self.get_color(1, offset, self.meta.classes)
             blue = self.get_color(0, offset, self.meta.classes)
             box_width = int(height * 0.006)
-            cv2.rectangle(img, (int(x), int(y)), (int(x+w)+1, int(y+h)+1), (red, green, blue), box_width)
+            cv2.rectangle(img, (int(x), int(y)), (int(x+w)+1,
+                                                  int(y+h)+1), (red, green, blue), box_width)
             cv2.putText(
-                        img, obj_name,
-                        (int(x) -2, int(y) -5),
-                        cv2.FONT_HERSHEY_COMPLEX,
-                        1.2, (red, green, blue),
-                        2, cv2.LINE_AA
-                       )
+                img, obj_name,
+                (int(x) - 2, int(y) - 5),
+                cv2.FONT_HERSHEY_COMPLEX,
+                1.2, (red, green, blue),
+                2, cv2.LINE_AA
+            )
 
         return img
 
@@ -396,7 +400,7 @@ def predict_from_pil(yolo, inputfilepath, outputfilepath):
     pred_img = yolo.draw_detections(cv2_img, yolo_results)
     save_pred_img(pred_img, outputfilepath)
 
-    
+
 def main():
     """
     main
